@@ -1,69 +1,50 @@
 cmake_minimum_required(VERSION 3.18)
 project(gpupy LANGUAGES CXX CUDA)
 
-# ============================================================
-# Basic configuration
-# ============================================================
+# 要求 C++17（现代 pybind11 与 CUDA 都推荐）
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 打印调试信息
-message(STATUS "Building gpupy with CUDA support")
-
-# ============================================================
-# Find Python and pybind11
-# ============================================================
-find_package(Python COMPONENTS Interpreter Development REQUIRED)
-find_package(pybind11 CONFIG REQUIRED)
-
-# ============================================================
-# CUDA configuration
-# ============================================================
+# 启用 CUDA 支持
 enable_language(CUDA)
-find_package(CUDA REQUIRED)
 
-# 设置 CUDA 架构 (根据你的 GPU 调整)
-# 常见：86 (Ampere), 89 (Ada), 90 (Hopper)
-set(CMAKE_CUDA_ARCHITECTURES 86)
+# 选择 Release 模式
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
 
-# 编译选项
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math -Xcompiler -fPIC")
+# 找到 pybind11（需要先 pip install pybind11）
+find_package(pybind11 REQUIRED)
 
-# ============================================================
-# Include directories
-# ============================================================
-include_directories(${PROJECT_SOURCE_DIR}/src)
+# 输出消息（调试用）
+message(STATUS "Using pybind11: ${pybind11_VERSION}")
+message(STATUS "CUDA toolkit found at: ${CMAKE_CUDA_COMPILER}")
 
-# ============================================================
-# Source files
-# ============================================================
-set(SRC_FILES
+# 设置源文件
+set(SOURCES
     src/gpu_memory.cpp
     src/gpu_array.cpp
     src/cuda_kernels.cu
     src/bindings.cpp
 )
 
-# ============================================================
-# Build shared library for Python import
-# ============================================================
-pybind11_add_module(gpupy ${SRC_FILES})
+# 创建 Python 模块（类似 setup.py build_ext）
+pybind11_add_module(gpupy_backend ${SOURCES})
+
+# 编译选项
+target_compile_options(gpupy_backend PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:
+        --extended-lambda
+        -lineinfo
+        -Xcompiler=-fPIC
+    >
+)
 
 # 链接 CUDA 库
-target_link_libraries(gpupy PRIVATE CUDA::cudart)
+find_package(CUDAToolkit REQUIRED)
+target_link_libraries(gpupy_backend PRIVATE CUDA::cudart)
 
-# ============================================================
-# Compile options for C++
-# ============================================================
-target_compile_options(gpupy PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -O3>
-)
-
-# ============================================================
-# Output settings
-# ============================================================
-set_target_properties(gpupy PROPERTIES
+# 输出路径（将生成的 .so 放到 Python 包中）
+set_target_properties(gpupy_backend PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/gpupy
 )
-
-message(STATUS "gpupy will be built into: ${PROJECT_SOURCE_DIR}/gpupy")
