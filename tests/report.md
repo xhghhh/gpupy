@@ -57,11 +57,11 @@ My GEMM [2048x2048] x [2048x2048] = [2048x2048]
 >
 >=== 测试完成 ===
 
-可以看到，优化kernal的结果是正确的，并且加速比随矩阵大小逐渐增大，在M=N=K=2048时，甚至达到了上百倍的加速比
+可以看到，优化kernel的结果是正确的，并且加速比随矩阵大小逐渐增大，在M=N=K=2048时，甚至达到了上百倍的加速比
 
 ## 不同优化版本数据分析
 
-在上面的测试数据中，优化后的kernal性能已经非常好了，代码里的kernal主要使用的优化手段有
+在上面的测试数据中，优化后的kernel性能已经非常好了，代码里的kernel主要使用的优化手段有
 1. **使用shared memory**：减少全局内存访问次数
 2. **线程块tiling**：提高数据重用
 3. **转置store A矩阵**：便于合并访存，减少访存事务
@@ -72,15 +72,15 @@ My GEMM [2048x2048] x [2048x2048] = [2048x2048]
 
 此外我还探索了其它的一些方法，比如异步指令cp.async，block swizzle等，测试效果如下图：
 ![performerce_img](https://github.com/cackio/image_pic/blob/main/img/202507210856259.png?raw=true)
-对比于naive实现，其他几个优化kernal要快很多，尤其是在大矩阵上。图中sgemmopt是使用了优化方法1,2,3,4,5,6，而gemm_bank_free是在sgemmopt的基础上进行了shared memory swizzle，解决了bank conflict冲突，用ncu测了一下，l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum：0，可以看到ld shared memory是没有bank冲突的，从图中看到的优化效果也很明显。
+对比于naive实现，其他几个优化kernel要快很多，尤其是在大矩阵上。图中sgemmopt是使用了优化方法1,2,3,4,5,6，而gemm_bank_free是在sgemmopt的基础上进行了shared memory swizzle，解决了bank conflict冲突，用ncu测了一下，l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum：0，可以看到ld shared memory是没有bank冲突的，从图中看到的优化效果也很明显。
 
-Ampere架构引入了异步拷贝指令cp.async，它直接从全局内存加载数据到SM共享内存中，消除了对中间寄存器文件使用的需要。gemm_cp_sync是在gemm_bank_free的基础上使用异步指令。我在gemm_cp_sync代码中将B矩阵的load shared memory用cp.async实现，A矩阵还是使用寄存器加载数据，因为Ampere架构下的cp.async并不支持直接转置。然后测试得到的结果和原来的gemm_bank_free性能相差无几，用ncu测这两个kernal的数据也差不多，Memory Workload Analysis数据基本一样，究其原因，我认为是流水的深度不够，kernal中使用的是double buffer，在multi-stage策略下cp.async才能很好发挥其作用。
+Ampere架构引入了异步拷贝指令cp.async，它直接从全局内存加载数据到SM共享内存中，消除了对中间寄存器文件使用的需要。gemm_cp_sync是在gemm_bank_free的基础上使用异步指令。我在gemm_cp_sync代码中将B矩阵的load shared memory用cp.async实现，A矩阵还是使用寄存器加载数据，因为Ampere架构下的cp.async并不支持直接转置。然后测试得到的结果和原来的gemm_bank_free性能相差无几，用ncu测这两个kernel的数据也差不多，Memory Workload Analysis数据基本一样，究其原因，我认为是流水的深度不够，kernel中使用的是double buffer，在multi-stage策略下cp.async才能很好发挥其作用。
 
 block swizzle也是经常被提到的优化策略，其目的是更好地利用L2 cache，尽量的提高L2 Hit率。在gemm_block_swizzle代码中，我使用的是蛇形swizzle，如图：
 <p align="center">
   <img src="https://github.com/cackio/image_pic/blob/main/img/202507211047955.png?raw=true" alt="swizzle_img">
 </p>
-但从性能图可以看出swizzle后的kernal性能几乎没有提升，然后我用ncu分别测试M=N=K=2048下gemm_bank_free和gemm_block_swizzle这两个kernal，前者的L2 hit率甚至达到了96.36%，而gemm_block_swizzle只高了百分之零点几，几乎没有提升，我认为是在这个矩阵大小下L2 cache足够大，能很好的放下缓存数据，所以block swizzle起不了明显的作用，然后我又在M=N=K=4096的矩阵下测试这两个kernal，两者的L2 hit率明显降低，前者的L2 hit率为50.27%，后者只高了4%左右，swizzle的效果仍然不明显，对此我认为一个重要的原因是block的发射行为难以预测，虽然目前一个共性的认知是block发射顺序是按照x->y->z的顺序来发射的，但随着部分block的结束，有SM可以容纳新的block，SM和block的映射关系是不确定的，或许本来发射顺序靠后的block先被某个SM发射，从而无法利用L2 cache，至少在我的架构和代码上，这种swizzle策略效果甚微。
+但从性能图可以看出swizzle后的kernel性能几乎没有提升，然后我用ncu分别测试M=N=K=2048下gemm_bank_free和gemm_block_swizzle这两个kernel，前者的L2 hit率甚至达到了96.36%，而gemm_block_swizzle只高了百分之零点几，几乎没有提升，我认为是在这个矩阵大小下L2 cache足够大，能很好的放下缓存数据，所以block swizzle起不了明显的作用，然后我又在M=N=K=4096的矩阵下测试这两个kernel，两者的L2 hit率明显降低，前者的L2 hit率为50.27%，后者只高了4%左右，swizzle的效果仍然不明显，对此我认为一个重要的原因是block的发射行为难以预测，虽然目前一个共性的认知是block发射顺序是按照x->y->z的顺序来发射的，但随着部分block的结束，有SM可以容纳新的block，SM和block的映射关系是不确定的，或许本来发射顺序靠后的block先被某个SM发射，从而无法利用L2 cache，至少在我的架构和代码上，这种swizzle策略效果甚微。
 
 ## 各种优化技术原理
 
@@ -112,11 +112,11 @@ float4向量化访存能减少指令数，一次float4加载等同于4次 float 
 
 ### 6.预取数据
 
-数据预取的一个重要作用就是减少数据依赖，如果不使用数据预取，一个线程要先发射load指令，并等待load完成后，才能发射计算指令，因为计算指令是依赖于load的数据的，而采用数据预取后，一个线程发射load指令后，可以马上发射计算指令，因为计算指令所依赖的数据已经取好了，虽然下发指令有前后顺序，但这时硬件内存单元和计算单元可以同时执行，很好地隐藏了内存访问延迟，大大提高吞吐率，提升了kernal性能。
+数据预取的一个重要作用就是减少数据依赖，如果不使用数据预取，一个线程要先发射load指令，并等待load完成后，才能发射计算指令，因为计算指令是依赖于load的数据的，而采用数据预取后，一个线程发射load指令后，可以马上发射计算指令，因为计算指令所依赖的数据已经取好了，虽然下发指令有前后顺序，但这时硬件内存单元和计算单元可以同时执行，很好地隐藏了内存访问延迟，大大提高吞吐率，提升了kernel性能。
 
 ### 7.free bank conflict
 
-解决bank conflict是kernal性能优化的重点内容，从上面的性能图里可以看出优化效果是很显著的。
+解决bank conflict是kernel性能优化的重点内容，从上面的性能图里可以看出优化效果是很显著的。
 
 和单个float访存不同，以float4向量化访问共享内存，**warp的访存会被拆成多个 transaction进行**，并以Half-Warp为单位来计算，对于每个Half-Warp而言，除非触发广播机制，这个Half-Warp中有多少个活跃的Quarter-Warp就需要多少个 memory transaction，如果触发广播机制那么两个Quarter-Warp中的 transaction就可以被合并成一个，触发广播机制只需满足以下条件中的至少一个：
 > * 对于Warp内所有活跃的第 i 号线程，第 i xor 1号线程不活跃或者访存地址和其一致；
@@ -134,7 +134,7 @@ sgemmopt的实现里，从共享内存load矩阵时会产生两路bank conflict�
 以取A shared memory为例，bank 示意图如下：
 ![bank2](https://github.com/cackio/image_pic/blob/main/img/202507212214714.png?raw=true)
 (只画了一个half-warp，并未全部画完)
-可以看到并没有bank冲突，并且z-order排列下满足transaction合并规则，原本一个half-warp需要两个transaction，现在合并为一个transaction，一个warp就只需要2个transaction，可以看到相比于原本的kernal，大大减少了访存事务。
+可以看到并没有bank冲突，并且z-order排列下满足transaction合并规则，原本一个half-warp需要两个transaction，现在合并为一个transaction，一个warp就只需要2个transaction，可以看到相比于原本的kernel，大大减少了访存事务。
 
 ## Tensor Core
 
@@ -199,7 +199,7 @@ add.s32 	%r13, %r185, 1;
 
 ### block swizzle
 
-block swizzle已经提过了，不再赘述，代码中的swizzle策略是把原本连续的块编号打散到不同的z层，从性能图中可以看出这样的swizzle方式能一定程度优化kernal性能的。代码：
+block swizzle已经提过了，不再赘述，代码中的swizzle策略是把原本连续的块编号打散到不同的z层，从性能图中可以看出这样的swizzle方式能一定程度优化kernel性能的。代码：
 ```c++
     \\no swizzle
     dim3 block(NUM_THREADS);                                                
